@@ -87,6 +87,8 @@ You can confirm the package file with the following command.
 ```
 $> ls ../*deb
 ```
+### Reset camera
+Check out the RESET_README.md for resetting the camera. This is useful anytime you lose connection with the camera.
 
 ## Contribution
 
