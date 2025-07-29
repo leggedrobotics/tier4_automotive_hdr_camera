@@ -2,7 +2,7 @@
 
 ## Overview
 
-This enhanced TIER4 camera driver provides comprehensive camera reset functionality for automotive HDR cameras with ISX021 sensors. The implementation includes a 9-step recovery process that can restore camera functionality from communication failures without requiring system reboots.
+This enhanced TIER4 camera driver provides comprehensive camera reset functionality for automotive HDR cameras with ISX021 sensors. The implementation includes step recovery process that can restore camera functionality from communication failures without requiring system reboots.
 
 ## Reset Process Details
 
