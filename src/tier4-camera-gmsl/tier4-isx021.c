@@ -402,6 +402,13 @@ static struct mutex tier4_sensor_lock__;
 
 static struct mutex tier4_isx021_lock;
 
+/* Forward declaration for sysfs reset function */
+static void tier4_isx021_gmsl_serdes_reset(struct tier4_isx021 *priv);
+static int tier4_isx021_gmsl_serdes_setup(struct tier4_isx021 *priv);
+static int tier4_isx021_set_mode(struct tegracam_device *tc_dev);
+static int tier4_isx021_stop_streaming(struct tegracam_device *tc_dev);
+static int tier4_isx021_set_response_mode(struct tier4_isx021 *priv);
+
 void tier4_isx021_sensor_mutex_lock(void)
 {
 	mutex_lock(&tier4_sensor_lock__);
@@ -724,6 +731,43 @@ err:
 	return err ? err : count;
 }
 static DEVICE_ATTR_RW(test_hw_fault);
+
+static ssize_t
+camera_reset_store(struct device *dev, struct device_attribute *attr,
+		   const char *buf, size_t count)
+{
+	struct camera_common_data *s_data = to_camera_common_data(dev);
+	struct tier4_isx021 *priv = s_data->priv;
+	long long reset_cmd;
+	int err;
+
+	dev_info(dev, "%s: camera reset requested: %s\n", __func__, buf);
+
+	err = kstrtoull(buf, 10, &reset_cmd);
+	if (err)
+		return err;
+
+	/* Only trigger reset if value is 1 */
+	if (reset_cmd == 1) {
+		dev_info(dev, "%s: Performing camera reset\n", __func__);
+		tier4_isx021_gmsl_serdes_reset(priv);
+		dev_info(dev, "%s: Camera reset completed\n", __func__);
+	} else {
+		dev_warn(dev, "%s: Invalid reset command %lld (use 1 to reset)\n",
+			 __func__, reset_cmd);
+		return -EINVAL;
+	}
+
+	return count;
+}
+
+static ssize_t
+camera_reset_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	return sprintf(buf, "Write 1 to trigger camera reset\n");
+}
+
+static DEVICE_ATTR_RW(camera_reset);
 
 
 static int
@@ -1127,16 +1171,72 @@ error:
 
 static void tier4_isx021_gmsl_serdes_reset(struct tier4_isx021 *priv)
 {
-	/* reset serdes addressing and control pipeline */
+	struct device *dev = priv->s_data->dev;
+	struct tegracam_device *tc_dev = priv->tc_dev;
+	int err;
+	
+	dev_info(dev, "[%s] : === COMPREHENSIVE CAMERA RESET START ===\n", __func__);
+	
+	/* Step 1: Stop any ongoing streaming */
+	dev_info(dev, "[%s] : Step 1 - Stopping streaming...\n", __func__);
+	tier4_isx021_stop_streaming(tc_dev);
+	
+	/* Step 2: Reset serializer (MAX9295) */
+	dev_info(dev, "[%s] : Step 2 - Resetting serializer (MAX9295)...\n", __func__);
 	tier4_max9295_reset_control(priv->ser_dev);
+	
+	/* Step 3: Reset deserializer (MAX9296) */
+	dev_info(dev, "[%s] : Step 3 - Resetting deserializer (MAX9296)...\n", __func__);
+	tier4_max9296_reset_control(priv->dser_dev, &priv->i2c_client->dev, false);
 
-	tier4_max9296_reset_control(priv->dser_dev, &priv->i2c_client->dev,
-				    false);
-
+	/* Step 4: Power cycle if supported */
 	if ((priv->g_ctx.hardware_model != HW_MODEL_ADLINK_ROSCUBE_XAVIER) &&
 	    (priv->g_ctx.hardware_model != HW_MODEL_ADLINK_ROSCUBE_ORIN)) {
+		dev_info(dev, "[%s] : Step 4 - Power cycling deserializer...\n", __func__);
 		tier4_max9296_power_off(priv->dser_dev);
+		msleep(500);  /* Longer delay for full power cycle */
+		tier4_max9296_power_on(priv->dser_dev);
+	} else {
+		dev_info(dev, "[%s] : Step 4 - Skipping power cycle (ROScube platform)\n", __func__);
 	}
+	
+	/* Step 5: Wait for hardware to stabilize */
+	dev_info(dev, "[%s] : Step 5 - Waiting for hardware stabilization...\n", __func__);
+	msleep(1000);  /* Extended wait for full stabilization */
+	
+	/* Step 6: Reinitialize GMSL setup */
+	dev_info(dev, "[%s] : Step 6 - Reinitializing GMSL setup...\n", __func__);
+	err = tier4_isx021_gmsl_serdes_setup(priv);
+	if (err) {
+		dev_err(dev, "[%s] : GMSL setup failed: %d\n", __func__, err);
+	} else {
+		dev_info(dev, "[%s] : GMSL setup completed successfully\n", __func__);
+	}
+	
+	/* Step 7: Reinitialize camera sensor */
+	dev_info(dev, "[%s] : Step 7 - Reinitializing camera sensor...\n", __func__);
+	err = tier4_isx021_set_mode(tc_dev);
+	if (err) {
+		dev_err(dev, "[%s] : Camera mode set failed: %d\n", __func__, err);
+	} else {
+		dev_info(dev, "[%s] : Camera mode set completed successfully\n", __func__);
+	}
+	
+	/* Step 8: Reset camera to response mode */
+	dev_info(dev, "[%s] : Step 8 - Setting camera response mode...\n", __func__);
+	err = tier4_isx021_set_response_mode(priv);
+	if (err) {
+		dev_err(dev, "[%s] : Response mode set failed: %d\n", __func__, err);
+	} else {
+		dev_info(dev, "[%s] : Response mode set completed successfully\n", __func__);
+	}
+	
+	/* Step 9: Final stabilization wait */
+	dev_info(dev, "[%s] : Step 9 - Final stabilization wait...\n", __func__);
+	msleep(500);
+	
+	dev_info(dev, "[%s] : === COMPREHENSIVE CAMERA RESET COMPLETE ===\n", __func__);
+	dev_info(dev, "[%s] : Camera should now be fully functional for streaming\n", __func__);
 }
 
 /*--------------------------------------------------------------------------*/
@@ -2980,14 +3080,32 @@ static int tier4_isx021_probe(struct i2c_client *client,
 	err = tier4_isx021_write_reg(tc_dev->s_data, TIER4_ISX021_REG_90_ADDR,
 				     0x06);
 
+	dev_info(&client->dev, "DEBUG: Before set_response_mode\n");
 	err = tier4_isx021_set_response_mode(priv);
 	if (err) {
 		dev_warn(dev, "[%s] : Transition to response mode failed.\n",
 			 __func__);
 		goto err_tegracam_v4l2_unreg;
 	}
+	dev_info(&client->dev, "DEBUG: After set_response_mode, about to create sysfs files\n");
 
-	device_create_file(&client->dev, &dev_attr_test_hw_fault);
+	err = device_create_file(&client->dev, &dev_attr_test_hw_fault);
+	if (err) {
+		dev_err(&client->dev, "Failed to create test_hw_fault sysfs: %d\n", err);
+	} else {
+		dev_info(&client->dev, "test_hw_fault sysfs created successfully\n");
+	}
+	
+	err = device_create_file(&client->dev, &dev_attr_camera_reset);
+	if (err) {
+		dev_err(&client->dev, "Failed to create camera_reset sysfs: %d\n", err);
+	} else {
+		dev_info(&client->dev, "camera_reset sysfs created successfully at %s\n",
+			 dev_name(&client->dev));
+	}
+
+	dev_info(&client->dev, "DEBUG: Sysfs file creation completed\n");
+	
 	tier4_max9295_set_v4l2_subdev(priv->ser_dev, priv->subdev);
 
 	dev_info(&client->dev, "Detected ISX021 sensor.\n");
@@ -3033,6 +3151,7 @@ static int tier4_isx021_remove(struct i2c_client *client)
 
 	tier4_max9295_unset_v4l2_subdev(priv->ser_dev);
 	device_remove_file(&client->dev, &dev_attr_test_hw_fault);
+	device_remove_file(&client->dev, &dev_attr_camera_reset);
 
 	tier4_isx021_shutdown(client);
 
