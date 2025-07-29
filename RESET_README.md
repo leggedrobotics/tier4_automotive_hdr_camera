@@ -4,24 +4,6 @@
 
 This enhanced TIER4 camera driver provides comprehensive camera reset functionality for automotive HDR cameras with ISX021 sensors. The implementation includes a 9-step recovery process that can restore camera functionality from communication failures without requiring system reboots.
 
-## Features
-
-- ✅ **Comprehensive 9-Step Reset Process**
-- ✅ **Hardware Reset (GMSL Serializer/Deserializer)**
-- ✅ **Power Cycling with Platform Detection**
-- ✅ **Complete Camera Reinitialization**
-- ✅ **Sysfs Interface for Easy Access**
-- ✅ **Detailed Logging for Debugging**
-- ✅ **Production-Ready Error Handling**
-
-## System Architecture
-
-```
-TIER4 Camera → GMSL Cable → PCB → Jetson Back Board → Jetson AGX Orin
-  (ISX021 +        (Serial      (Interface/    (MAX9296         (CSI Input +
-   MAX9295)        Data)        Adapter)       Deserializer)     Processing)
-```
-
 ## Reset Process Details
 
 ### Hardware Reset (Steps 1-5):
