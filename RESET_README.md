@@ -113,11 +113,6 @@ v4l2-ctl --device=/dev/video0 --info
 
 ### Usage Commands:
 
-#### View Usage Information:
-```bash
-cat /sys/devices/platform/3180000.i2c/i2c-2/i2c-30/30-001b/camera_reset
-```
-
 #### Trigger Camera Reset:
 ```bash
 echo 1 | sudo tee /sys/devices/platform/3180000.i2c/i2c-2/i2c-30/30-001b/camera_reset
